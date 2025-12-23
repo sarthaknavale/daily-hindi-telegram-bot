@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: daily-hindi-telegram-bot
+    env: python
+    pythonVersion: 3.12.17
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
