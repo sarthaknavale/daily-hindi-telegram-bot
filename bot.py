@@ -7,7 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ------------------ ENV VARIABLES ------------------
+# ================= ENV VARIABLES =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -16,7 +16,7 @@ if not BOT_TOKEN or not CHAT_ID:
 
 bot = Bot(token=BOT_TOKEN)
 
-# ------------------ DAILY HINDI LESSON ------------------
+# ================= DAILY HINDI LESSON =================
 async def send_hindi_lesson():
     lesson = """
 🗣️ *Spoken Hindi – Daily Lesson*
@@ -38,7 +38,7 @@ async def send_hindi_lesson():
 def scheduled_job():
     asyncio.run(send_hindi_lesson())
 
-# Schedule every day at 08:45 UTC
+# Schedule daily at 08:45 UTC
 schedule.every().day.at("08:45").do(scheduled_job)
 
 def scheduler_loop():
@@ -47,7 +47,7 @@ def scheduler_loop():
         schedule.run_pending()
         time.sleep(1)
 
-# ------------------ /start COMMAND ------------------
+# ================= /start COMMAND =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome!\n\nYou’ll receive daily spoken Hindi lessons here.\n⏰ Every day at 08:45 UTC",
@@ -62,12 +62,13 @@ async def telegram_polling():
 def telegram_thread():
     asyncio.run(telegram_polling())
 
-# ------------------ HTTP SERVER FOR RENDER FREE ------------------
+# ================= HTTP SERVER FOR RENDER FREE =================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running 🚀")
+        # Encode Unicode to bytes (fix emoji issue)
+        self.wfile.write("Bot is running 🚀".encode("utf-8"))
 
 def start_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -75,7 +76,7 @@ def start_http_server():
     print(f"🌐 HTTP server running on port {port}")
     server.serve_forever()
 
-# ------------------ MAIN ------------------
+# ================= MAIN =================
 if __name__ == "__main__":
     print("🤖 Hindi Bot Starting...")
 
