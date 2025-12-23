@@ -1,4 +1,3 @@
-import os
 import threading
 import time
 import asyncio
@@ -7,16 +6,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ================= ENV VARIABLES =================
-BOT_TOKEN = os.environ.get("8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ")
-CHAT_ID = os.environ.get("753500208")
-
-if not BOT_TOKEN or not CHAT_ID:
-    raise RuntimeError("BOT_TOKEN or CHAT_ID environment variables are not set!")
+# ---------------- BOT CONFIG ----------------
+# Free tier: store token and chat_id directly
+BOT_TOKEN = "8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ"
+CHAT_ID = "753500208"
 
 bot = Bot(token=BOT_TOKEN)
 
-# ================= DAILY HINDI LESSON =================
+# ---------------- DAILY LESSON ----------------
 async def send_hindi_lesson():
     lesson = """
 🗣️ *Spoken Hindi – Daily Lesson*
@@ -47,10 +44,10 @@ def scheduler_loop():
         schedule.run_pending()
         time.sleep(1)
 
-# ================= /start COMMAND =================
+# ---------------- /start COMMAND ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome!\n\nYou’ll receive daily spoken Hindi lessons here.\n⏰ Every day at 08:45 UTC",
+        "👋 Welcome!\n\nYou’ll receive daily Hindi lessons here.\n⏰ Every day at 08:45 UTC",
         parse_mode="Markdown"
     )
 
@@ -62,21 +59,20 @@ async def telegram_polling():
 def telegram_thread():
     asyncio.run(telegram_polling())
 
-# ================= HTTP SERVER FOR RENDER FREE =================
+# ---------------- HTTP SERVER (Render Free) ----------------
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        # Encode Unicode to bytes (fix emoji issue)
         self.wfile.write("Bot is running 🚀".encode("utf-8"))
 
 def start_http_server():
-    port = int(os.environ.get("PORT", 10000))
+    port = 10000  # Free tier fixed port
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     print(f"🌐 HTTP server running on port {port}")
     server.serve_forever()
 
-# ================= MAIN =================
+# ---------------- MAIN ----------------
 if __name__ == "__main__":
     print("🤖 Hindi Bot Starting...")
 
@@ -84,5 +80,5 @@ if __name__ == "__main__":
     threading.Thread(target=scheduler_loop, daemon=True).start()
     threading.Thread(target=telegram_thread, daemon=True).start()
 
-    # Start HTTP server (Render Free requires a bound port)
+    # Start HTTP server
     start_http_server()
