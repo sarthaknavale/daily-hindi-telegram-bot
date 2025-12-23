@@ -8,8 +8,8 @@ from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ================= ENV VARIABLES =================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+BOT_TOKEN = os.environ.get("8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ")
+CHAT_ID = os.environ.get("753500208")
 
 if not BOT_TOKEN or not CHAT_ID:
     raise RuntimeError("BOT_TOKEN or CHAT_ID environment variables are not set!")
