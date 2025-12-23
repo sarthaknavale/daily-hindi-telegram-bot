@@ -28,7 +28,7 @@ async def send_hindi_lesson():
 
 📌 Speak aloud today!
 """
-    await bot.send_message(chat_id=753500208, text=lesson, parse_mode="Markdown")
+    await bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
 
 def scheduled_job():
     asyncio.run(send_hindi_lesson())
@@ -49,7 +49,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def telegram_polling():
-    app = ApplicationBuilder().token(8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     await app.run_polling()
 
