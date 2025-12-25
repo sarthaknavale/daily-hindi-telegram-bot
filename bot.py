@@ -8,26 +8,27 @@ from flask import Flask
 from threading import Thread
 
 # --- RENDER KEEP-ALIVE SECTION ---
-# This creates a tiny web server so Render doesn't shut down the bot.
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot is active!"
 
 def run_web_server():
+    # Render provides a PORT environment variable automatically
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run_web_server)
+    t.daemon = True
     t.start()
 # ---------------------------------
 
-# Load secrets from Environment Variables (Set these in Render Dashboard)
-BOT_TOKEN = os.environ.get("8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ")
-CHAT_ID = os.environ.get("753500208")
-OPENAI_API_KEY = os.environ.get("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")
+# CORRECT WAY: We use the NAME of the variable, not the secret itself
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # Initialize Bot and OpenAI
 bot = Bot(token=BOT_TOKEN)
@@ -35,27 +36,19 @@ openai.api_key = OPENAI_API_KEY
 
 def generate_hindi_lesson():
     today = date.today().strftime("%d %B %Y")
-
     prompt = """
     You are a Hindi teacher.
     Create 5 short SPOKEN Hindi phrases for daily conversation.
-    Include:
-    - Hindi (Devanagari)
-    - English meaning
-    - Very simple, natural phrases
+    Include Hindi (Devanagari) and English meaning.
     Keep it beginner friendly.
     """
-
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7
     )
-
     lesson = response.choices[0].message.content
-
-    final_message = f"🗣️ *Spoken Hindi – {today}*\n\n{lesson}\n\n📌 Speak aloud today!"
-    return final_message
+    return f"🗣️ *Spoken Hindi – {today}*\n\n{lesson}\n\n📌 Speak aloud today!"
 
 def send_hindi_lesson():
     try:
@@ -63,18 +56,14 @@ def send_hindi_lesson():
         bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
         print(f"Lesson sent successfully at {time.ctime()}")
     except Exception as e:
-        print(f"Error sending message: {e}")
+        print(f"Error: {e}")
 
-# Schedule the task
+# Schedule the task (2:00 AM UTC)
 schedule.every().day.at("02:00").do(send_hindi_lesson)
 
 if __name__ == "__main__":
-    # 1. Start the web server to stay alive on Render
-    keep_alive()
-    
-    print("🤖 Auto Hindi Teacher Bot Running...")
-    
-    # 2. Start the infinite loop for the scheduler
+    keep_alive() # Mandatory for Render Free Tier
+    print("🤖 Bot is running...")
     while True:
         schedule.run_pending()
         time.sleep(1)
