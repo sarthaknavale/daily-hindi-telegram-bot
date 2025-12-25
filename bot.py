@@ -1,93 +1,57 @@
-import threading
-import time
-import asyncio
-import schedule
 import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Bot, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import time
+import schedule
+from telegram import Bot
+import openai
+from datetime import date
 
-# ================= BOT CONFIG =================
-# NOTE: Free tier – token stored directly (NOT recommended for production)
-BOT_TOKEN = "8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ"
-CHAT_ID = "753500208"
+# Load secrets
+BOT_TOKEN = os.environ.get("8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ")
+CHAT_ID = os.environ.get("753500208")
+OPENAI_API_KEY = os.environ.get("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")
 
 bot = Bot(token=BOT_TOKEN)
+openai.api_key = OPENAI_API_KEY
 
-# ================= DAILY LESSON =================
-async def send_hindi_lesson():
-    lesson = (
-        "🗣️ *Spoken Hindi – Daily Lesson*\n\n"
-        "1️⃣ कैसे हो? – How are you?\n"
-        "2️⃣ क्या कर रहे हो? – What are you doing?\n"
-        "3️⃣ कहाँ जा रहे हो? – Where are you going?\n"
-        "4️⃣ थोड़ा रुको – Wait a little\n"
-        "5️⃣ कोई बात नहीं – No problem\n\n"
-        "📌 Speak aloud today!"
+def generate_hindi_lesson():
+    today = date.today().strftime("%d %B %Y")
+
+    prompt = f"""
+    You are a Hindi teacher.
+    Create 5 short SPOKEN Hindi phrases for daily conversation.
+    Include:
+    - Hindi (Devanagari)
+    - English meaning
+    - Very simple, natural phrases
+    Keep it beginner friendly.
+    """
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
     )
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=lesson,
-        parse_mode="Markdown"
-    )
+    lesson = response.choices[0].message.content
 
-def scheduled_job():
-    asyncio.run(send_hindi_lesson())
+    final_message = f"""
+🗣️ *Spoken Hindi – {today}*
 
-# Send daily at 08:45 UTC
-schedule.every().day.at("08:45").do(scheduled_job)
+{lesson}
 
-def scheduler_loop():
-    print("⏰ Scheduler started")
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+📌 Speak aloud today!
+"""
+    return final_message
 
-# ================= /start COMMAND =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 *Welcome!*\n\n"
-        "You’ll receive *daily Hindi lessons* here.\n"
-        "⏰ Every day at *08:45 UTC*",
-        parse_mode="Markdown"
-    )
+def send_hindi_lesson():
+    lesson = generate_hindi_lesson()
+    bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
 
-async def telegram_polling():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    await app.run_polling()
+# ⏰ 8:45 AM IST = 03:15 UTC
+schedule.every().day.at("02:00").do(send_hindi_lesson)
 
-def telegram_thread():
-    asyncio.run(telegram_polling())
+print("🤖 Auto Hindi Teacher Bot Running...")
 
-# ================= HTTP SERVER (ANTI-SLEEP) =================
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("Bot is running".encode("utf-8"))
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        return  # silence logs
-
-def start_http_server():
-    port = int(os.environ.get("PORT", 10000))  # Render-required
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"🌐 HTTP server running on port {port}")
-    server.serve_forever()
-
-# ================= MAIN =================
-if __name__ == "__main__":
-    print("🤖 Hindi Bot Starting...")
-
-    threading.Thread(target=scheduler_loop, daemon=True).start()
-    threading.Thread(target=telegram_thread, daemon=True).start()
-
-    start_http_server()
+while True:
+    schedule.run_pending()
+    time.sleep(1)
