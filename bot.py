@@ -3,7 +3,7 @@ import time
 import schedule
 import asyncio
 from telegram import Bot
-import google.generativeai as genai  # NEW: Free Google API
+import google.generativeai as genai
 from datetime import date
 from flask import Flask
 from threading import Thread
@@ -20,7 +20,7 @@ def home():
             <h1>🤖 Free Bot Status: <span style="color: green;">LIVE</span></h1>
             <p><b>Target Chat ID:</b> {CHAT_ID}</p>
             <p><b>Last Status:</b> {last_sent_time}</p>
-            <p><b>Engine:</b> Google Gemini (Free Tier)</p>
+            <p><b>Engine:</b> Gemini 1.5 Flash (Free Tier)</p>
         </body>
     </html>
     """
@@ -35,32 +35,31 @@ def keep_alive():
     t.start()
 # ------------------------------------------
 
-# Load Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Initialize Bot and Gemini
 bot = Bot(token=BOT_TOKEN)
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-pro')
+
+# UPDATE: Changed model to gemini-1.5-flash
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def generate_hindi_lesson():
     today = date.today().strftime("%d %B %Y")
-    prompt = "Create 5 short spoken Hindi phrases with English meanings for beginners. Format it nicely for Telegram."
+    prompt = "Create 5 short spoken Hindi phrases with English meanings for beginners. Format with bullet points."
     
-    # Using Gemini Free API
     response = model.generate_content(prompt)
     return f"🗣️ *Spoken Hindi – {today}*\n\n{response.text}"
 
 async def send_hindi_lesson():
     global last_sent_time
     try:
-        print(f"DEBUG: Generating free lesson at {time.ctime()}")
+        print(f"DEBUG: Generating lesson via Gemini 1.5 at {time.ctime()}")
         lesson = await asyncio.to_thread(generate_hindi_lesson)
         await bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
         last_sent_time = f"Success at {time.ctime()}"
-        print("✅ SUCCESS: Free message sent.")
+        print("✅ SUCCESS: Message sent using Gemini 1.5 Flash.")
     except Exception as e:
         last_sent_time = f"Error: {e}"
         print(f"❌ ERROR: {e}")
@@ -73,14 +72,11 @@ def run_async_task():
     finally:
         loop.close()
 
-# Schedule: Every 5 minutes
 schedule.every(5).minutes.do(run_async_task)
 
 if __name__ == "__main__":
     keep_alive()
-    print("🤖 Free Bot initialized...")
-    
-    # Send test message immediately
+    # Trigger first message immediately
     Thread(target=run_async_task).start() 
     
     while True:
