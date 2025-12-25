@@ -59,7 +59,7 @@ def send_hindi_lesson():
         print(f"Error: {e}")
 
 # Schedule the task (2:00 AM UTC)
-schedule.every().day.at("02:00").do(send_hindi_lesson)
+schedule.every().day.at("03:05").do(send_hindi_lesson)
 
 if __name__ == "__main__":
     keep_alive() # Mandatory for Render Free Tier
