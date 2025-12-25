@@ -3,62 +3,64 @@ import time
 import schedule
 import asyncio
 from telegram import Bot
-from google import genai
-from google.genai import errors # For handling quota errors
+from groq import Groq  # NEW: Using Groq for free speed
 from datetime import date
 from flask import Flask
 from threading import Thread
 
-# --- STATUS PAGE ---
+# --- RENDER KEEP-ALIVE & STATUS SECTION ---
 app = Flask('')
-last_sent_time = "Never"
+last_status = "Initializing..."
 
 @app.route('/')
 def home(): 
-    return f"<h1>Bot Status: LIVE</h1><p>Last Status: {last_sent_time}</p><p>Interval: 60 Minutes</p>"
+    return f"""
+    <html>
+        <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+            <h1>🤖 Bot Status: <span style="color: green;">LIVE</span></h1>
+            <p><b>Target Chat ID:</b> {CHAT_ID}</p>
+            <p><b>Last Status:</b> {last_status}</p>
+            <p><b>Engine:</b> Groq (Llama 3.3 70B - Free)</p>
+            <p><b>Interval:</b> Every 60 Minutes</p>
+        </body>
+    </html>
+    """
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+# ------------------------------------------
 
-# --- BOT LOGIC ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_KEY = os.environ.get("GROQ_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
-client = genai.Client(api_key=GEMINI_KEY)
+client = Groq(api_key=GROQ_KEY)
 
 def generate_hindi_lesson():
     today = date.today().strftime("%d %B %Y")
-    prompt = "Create 5 short spoken Hindi phrases with English meanings for beginners. Use bullet points."
+    prompt = "Create 5 short spoken Hindi phrases with English meanings for beginners. Format with bullet points."
     
-    # Implementation of exponential backoff (Retry logic)
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.0-flash', 
-                contents=prompt
-            )
-            return f"🗣️ *Spoken Hindi – {today}*\n\n{response.text}"
-        except errors.ClientError as e:
-            if "429" in str(e) and attempt < 2:
-                wait = (attempt + 1) * 30
-                print(f"Quota hit. Waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            raise e
+    # Using Llama-3.3-70b via Groq (Fast and Free)
+    completion = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+    )
+    return f"🗣️ *Spoken Hindi – {today}*\n\n{completion.choices[0].message.content}"
 
 async def send_hindi_lesson():
-    global last_sent_time
+    global last_status
     try:
+        print(f"DEBUG: Generating lesson via Groq at {time.ctime()}")
         lesson = await asyncio.to_thread(generate_hindi_lesson)
         await bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
-        last_sent_time = f"Success at {time.ctime()}"
-        print("✅ Message sent.")
+        last_status = f"Success at {time.ctime()}"
+        print("✅ SUCCESS: Message sent via Groq.")
     except Exception as e:
-        last_sent_time = f"Error: {e}"
-        print(f"❌ Error: {e}")
+        last_status = f"Error: {e}"
+        print(f"❌ ERROR: {e}")
 
 def run_async_task():
     loop = asyncio.new_event_loop()
@@ -68,15 +70,16 @@ def run_async_task():
     finally:
         loop.close()
 
-# INCREASED TIME: Changed from 5 to 60 minutes
+# INTERVAL: Set to 60 minutes for stability
 schedule.every(60).minutes.do(run_async_task)
 
 if __name__ == "__main__":
+    # Start Keep-Alive
     t = Thread(target=run_web_server)
     t.daemon = True
     t.start()
     
-    # Run once immediately on start
+    # Immediate test message
     Thread(target=run_async_task).start() 
     
     while True:
