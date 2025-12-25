@@ -10,22 +10,17 @@ from threading import Thread
 
 # --- RENDER KEEP-ALIVE & STATUS SECTION ---
 app = Flask('')
-
-# Global variable to track the last successful message time
 last_sent_time = "Never"
 
 @app.route('/')
 def home(): 
     return f"""
     <html>
-        <head><title>Bot Status</title></head>
         <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-            <h1>🤖 Bot Status: <span style="color: green;">LIVE</span></h1>
+            <h1>🤖 Bot Status: <span style="color: orange;">QUOTA LIMIT REACHED</span></h1>
             <p><b>Target Chat ID:</b> {CHAT_ID}</p>
-            <p><b>Last Successful Message:</b> {last_sent_time}</p>
-            <p><b>Current Server Time:</b> {time.ctime()}</p>
-            <hr width="50%">
-            <p style="color: gray;">If the Chat ID above is wrong, update your Render Environment Variables.</p>
+            <p><b>Last Status:</b> {last_sent_time}</p>
+            <p><b>Action Required:</b> Check your OpenAI Billing/Quota.</p>
         </body>
     </html>
     """
@@ -40,7 +35,6 @@ def keep_alive():
     t.start()
 # ------------------------------------------
 
-# Environment Variable Loading
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -61,21 +55,16 @@ def generate_hindi_lesson():
 async def send_hindi_lesson():
     global last_sent_time
     try:
-        print(f"DEBUG: Attempting to send message at {time.ctime()}")
-        # Prevent blocking the async loop with OpenAI call
         lesson = await asyncio.to_thread(generate_hindi_lesson)
-        
         await bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
-        
-        last_sent_time = time.ctime()
-        print(f"✅ SUCCESS: Message sent to {CHAT_ID}")
+        last_sent_time = f"Success at {time.ctime()}"
+    except openai.error.RateLimitError:
+        last_sent_time = "Error: OpenAI Quota Exceeded"
+        await bot.send_message(chat_id=CHAT_ID, text="⚠️ *Bot Alert:* Your OpenAI API quota has been exceeded. Please check your billing at platform.openai.com.")
     except Exception as e:
-        error_msg = f"{type(e).__name__}: {e}"
-        last_sent_time = f"FAILED Error: {error_msg}"
-        print(f"❌ ERROR: {error_msg}")
+        last_sent_time = f"Error: {e}"
 
 def run_async_task():
-    """Fresh event loop for every scheduled task to prevent crashes on Render"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -83,16 +72,12 @@ def run_async_task():
     finally:
         loop.close()
 
-# Schedule: Every 5 minutes
+# Keep it at 5 minutes for testing, but change to .day.at() for long-term use
 schedule.every(5).minutes.do(run_async_task)
 
 if __name__ == "__main__":
     keep_alive()
-    print("🤖 Bot Service starting up...")
-    
-    # Send one message immediately to verify everything is correct
     Thread(target=run_async_task).start() 
-    
     while True:
         schedule.run_pending()
         time.sleep(1)
