@@ -58,12 +58,12 @@ def send_hindi_lesson():
     except Exception as e:
         print(f"Error: {e}")
 
-# Schedule the task (2:00 AM UTC)
-schedule.every().day.at("03:45").do(send_hindi_lesson)
+# UPDATED SCHEDULE: 16:00 UTC is exactly 09:30 PM IST
+schedule.every().day.at("16:00").do(send_hindi_lesson)
 
 if __name__ == "__main__":
     keep_alive() # Mandatory for Render Free Tier
-    print("🤖 Bot is running...")
+    print("🤖 Bot is running. Next lesson scheduled for 09:30 PM IST.")
     while True:
         schedule.run_pending()
         time.sleep(1)
