@@ -20,7 +20,7 @@ def home():
             <h1>🤖 Free Bot Status: <span style="color: green;">LIVE</span></h1>
             <p><b>Target Chat ID:</b> {CHAT_ID}</p>
             <p><b>Last Status:</b> {last_sent_time}</p>
-            <p><b>Engine:</b> Gemini 1.5 Flash (Free Tier)</p>
+            <p><b>Engine:</b> Gemini 1.5 Flash (Verified)</p>
         </body>
     </html>
     """
@@ -40,26 +40,28 @@ CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
-genai.configure(api_key=GEMINI_KEY)
 
-# UPDATE: Changed model to gemini-1.5-flash
+# Initialize Gemini correctly
+genai.configure(api_key=GEMINI_KEY)
+# Use the direct model name string
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def generate_hindi_lesson():
     today = date.today().strftime("%d %B %Y")
     prompt = "Create 5 short spoken Hindi phrases with English meanings for beginners. Format with bullet points."
     
+    # Generate content using the new Flash model
     response = model.generate_content(prompt)
     return f"🗣️ *Spoken Hindi – {today}*\n\n{response.text}"
 
 async def send_hindi_lesson():
     global last_sent_time
     try:
-        print(f"DEBUG: Generating lesson via Gemini 1.5 at {time.ctime()}")
+        print(f"DEBUG: Generating lesson at {time.ctime()}")
         lesson = await asyncio.to_thread(generate_hindi_lesson)
         await bot.send_message(chat_id=CHAT_ID, text=lesson, parse_mode="Markdown")
         last_sent_time = f"Success at {time.ctime()}"
-        print("✅ SUCCESS: Message sent using Gemini 1.5 Flash.")
+        print("✅ SUCCESS: Message sent.")
     except Exception as e:
         last_sent_time = f"Error: {e}"
         print(f"❌ ERROR: {e}")
@@ -72,11 +74,14 @@ def run_async_task():
     finally:
         loop.close()
 
+# Set for every 5 minutes
 schedule.every(5).minutes.do(run_async_task)
 
 if __name__ == "__main__":
     keep_alive()
-    # Trigger first message immediately
+    print("🤖 Bot Service starting...")
+    
+    # Send test message immediately on startup
     Thread(target=run_async_task).start() 
     
     while True:
