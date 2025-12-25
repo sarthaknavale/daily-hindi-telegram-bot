@@ -55,7 +55,7 @@ def run_async_task():
     asyncio.run(send_hindi_lesson())
 
 # 16:00 UTC = 09:30 PM IST
-schedule.every().day.at("16:31").do(run_async_task)
+schedule.every().day.at("16:37").do(run_async_task)
 
 if __name__ == "__main__":
     keep_alive()
