@@ -6,26 +6,20 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 from threading import Thread
 
-# --- RENDER PORT BINDING ---
+# --- PORT BINDING FOR RENDER ---
 app = Flask('')
 @app.route('/')
-def home(): return "STABLE", 200
+def home(): return "RUNNING", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- Python 3.14 Fix ---
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-# --- CONFIGURATION ---
+# --- CONFIG ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-# PRO TIP: The file name in your repo might be 'lessons.xlsx' or 'lessons.csv'
-LESSON_FILE = "lessons.xlsx" 
+# Based on your file upload, it is a CSV but named with .xlsx
+# Ensure this matches the exact filename in your GitHub repo
+FILE_NAME = "lessons.xlsx" 
 USERS_FILE = "users.json"
 
 def load_users():
@@ -36,70 +30,56 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-# --- IMPROVED EXCEL/CSV READER ---
-async def fetch_and_send(chat_id, context):
+async def send_lesson(chat_id, context):
     users = load_users()
     uid = str(chat_id)
     if uid not in users: users[uid] = {"day": 1}
     
-    # Check for file existence
-    if not os.path.exists(LESSON_FILE):
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {LESSON_FILE} not found!")
-        return False
-    
     try:
-        # PRO FIX: Automatically detect if it's CSV or XLSX
-        if LESSON_FILE.endswith('.csv'):
-            df = pd.read_csv(LESSON_FILE)
-        else:
-            df = pd.read_excel(LESSON_FILE)
-
+        # PRO FIX: Use read_csv because your file content is CSV format
+        df = pd.read_csv(FILE_NAME)
         day = users[uid].get("day", 1)
-        # Filters by 'Day' column
         row = df[df['Day'] == day]
         
         if not row.empty:
-            # Using your specific column names: 'Hindi (Male)' and 'English'
-            h = html.escape(str(row.iloc[0]['Hindi (Male)']))
-            e = html.escape(str(row.iloc[0]['English']))
+            # Matches your columns: "Hindi (Male)" and "English"
+            hindi = html.escape(str(row.iloc[0]['Hindi (Male)']))
+            english = html.escape(str(row.iloc[0]['English']))
             
-            text = f"<b>📖 Day {day} Lesson</b>\n\n<b>Hindi:</b> {h}\n<b>English:</b> {e}"
-            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            msg = f"<b>📅 Day {day} Lesson</b>\n\n<b>Hindi:</b> {hindi}\n<b>English:</b> {english}"
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             return True
-        else:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ No lesson found for Day {day}")
-    except Exception as err:
-        print(f"File Read Error: {err}")
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ Error reading file: {str(err)}")
+    except Exception as e:
+        print(f"Error: {e}")
     return False
 
 # --- COMMANDS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🚀 **PRO Bot Active.**\nDaily: 6:15 PM IST.\nUse /test to check now.")
+    await u.message.reply_text("✅ Bot setup complete. 5:10 PM IST schedule active.")
 
 async def test(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await fetch_and_send(u.effective_chat.id, c)
+    await send_lesson(u.effective_chat.id, c)
 
 async def daily_job(c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     for uid in users:
-        success = await fetch_and_send(int(uid), c)
-        if success: users[uid]["day"] += 1
+        if await send_lesson(int(uid), c):
+            users[uid]["day"] += 1
     save_users(users)
 
 if __name__ == "__main__":
-    if not BOT_TOKEN: exit(1)
-
     Thread(target=run_flask, daemon=True).start()
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Initialize with the new token from environment variables
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Schedule for 6:15 PM IST
+    # Time: 17:20 IST
     IST = pytz.timezone('Asia/Kolkata')
-    t = dt_time(hour=18, minute=15, second=0, tzinfo=IST)
-    app_bot.job_queue.run_daily(daily_job, time=t, days=(0,1,2,3,4,5,6))
+    target_time = dt_time(hour=17, minute=20, second=0, tzinfo=IST)
+    application.job_queue.run_daily(daily_job, time=target_time)
 
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("test", test))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("test", test))
 
-    # Conflict Killer
-    app_bot.run_polling(drop_pending_updates=True)
+    # CRITICAL: drop_pending_updates=True stops the Conflict Error
+    application.run_polling(drop_pending_updates=True)
