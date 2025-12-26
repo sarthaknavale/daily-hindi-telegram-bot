@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==20.0
 pandas
 openpyxl
-pytz
 flask
+pytz
