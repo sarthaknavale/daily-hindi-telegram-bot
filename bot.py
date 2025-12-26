@@ -36,21 +36,33 @@ async def send_lesson(chat_id, context):
     if uid not in users: users[uid] = {"day": 1}
     
     try:
-        # PRO FIX: Use read_csv because your file content is CSV format
+        # Read the file (adjust name to lessons.csv if needed)
         df = pd.read_csv(FILE_NAME)
         day = users[uid].get("day", 1)
-        row = df[df['Day'] == day]
         
-        if not row.empty:
-            # Matches your columns: "Hindi (Male)" and "English"
-            hindi = html.escape(str(row.iloc[0]['Hindi (Male)']))
-            english = html.escape(str(row.iloc[0]['English']))
+        # PRO FIX: Filter ALL rows for the current day
+        day_rows = df[df['Day'] == day]
+        
+        if not day_rows.empty:
+            # Build a single message with all rows for that day
+            full_msg = f"<b>📅 Day {day} Lessons</b>\n"
+            full_msg += "----------------------------\n"
             
-            msg = f"<b>📅 Day {day} Lesson</b>\n\n<b>Hindi:</b> {hindi}\n<b>English:</b> {english}"
-            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+            for index, row in day_rows.iterrows():
+                h_male = html.escape(str(row['Hindi (Male)']))
+                h_female = html.escape(str(row['Hindi (Female)']))
+                eng = html.escape(str(row['English']))
+                
+                full_msg += f"🔹 <b>English:</b> {eng}\n"
+                full_msg += f"👨 <b>Hindi (M):</b> {h_male}\n"
+                full_msg += f"👩 <b>Hindi (F):</b> {h_female}\n\n"
+            
+            await context.bot.send_message(chat_id=chat_id, text=full_msg, parse_mode="HTML")
             return True
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ No lessons found for Day {day}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error reading file: {e}")
     return False
 
 # --- COMMANDS ---
