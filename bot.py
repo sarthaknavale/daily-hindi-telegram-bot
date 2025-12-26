@@ -1,75 +1,74 @@
-import os
-import time
-import schedule
-import asyncio
-from telegram import Bot
-from groq import Groq
-from datetime import date
-from flask import Flask
-from threading import Thread
-import html # Added for safe character handling
+import json, asyncio, os, html, pytz
+import pandas as pd
+from datetime import time as dt_time
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- RENDER KEEP-ALIVE ---
-app = Flask('')
-last_status = "Initializing..."
-
-@app.route('/')
-def home(): 
-    return f"<h1>Bot Status: LIVE</h1><p>Last Status: {last_status}</p>"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# --- BOT CONFIG ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-GROQ_KEY = os.environ.get("GROQ_API_KEY")
-
-bot = Bot(token=BOT_TOKEN)
-client = Groq(api_key=GROQ_KEY)
-
-def generate_hindi_lesson():
-    today = date.today().strftime("%d %B %Y")
-    # We ask for a simple format to keep it safe
-    prompt = "Create 5 short spoken Hindi phrases with English meanings. Format as a simple list."
-    
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    # This cleans the AI text so characters like '<' or '&' don't break HTML
-    safe_content = html.escape(completion.choices[0].message.content)
-    return f"<b>🗣️ Spoken Hindi – {today}</b>\n\n{safe_content}"
-
-async def send_hindi_lesson():
-    global last_status
-    try:
-        lesson_text = await asyncio.to_thread(generate_hindi_lesson)
-        # SWITCHED: parse_mode is now HTML
-        await bot.send_message(chat_id=CHAT_ID, text=lesson_text, parse_mode="HTML")
-        last_status = f"Success at {time.ctime()}"
-    except Exception as e:
-        last_status = f"Error: {e}"
-        print(f"❌ ERROR: {e}")
-
-def run_async_task():
+# --- Python 3.14 Event Loop Compatibility Fix ---
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+# ---------------- CONFIG ----------------
+BOT_TOKEN = "8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ"
+LESSON_FILE = "lessons.xlsx"
+USERS_FILE = "users.json"
+
+def load_users():
     try:
-        loop.run_until_complete(send_hindi_lesson())
-    finally:
-        loop.close()
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError: return {}
 
-schedule.every(60).minutes.do(run_async_task)
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
 
+# ---------------- DAILY LESSON JOB ----------------
+async def send_daily_lesson(context: ContextTypes.DEFAULT_TYPE):
+    users = load_users()
+    try:
+        df = pd.read_excel(LESSON_FILE)
+    except Exception as e:
+        print(f"Excel Error: {e}")
+        return
+
+    for chat_id, data in users.items():
+        if not data.get("paused", False):
+            day = data.get("day", 1)
+            day_data = df[df['Day'] == day]
+            
+            if not day_data.empty:
+                row = day_data.iloc[0]
+                # Secure formatting for Telegram HTML mode
+                h = html.escape(str(row['Hindi']))
+                e = html.escape(str(row['English']))
+                msg = f"<b>📅 Day {day} Lesson</b>\n\n<b>Hindi:</b> {h}\n<b>English:</b> {e}"
+                
+                try:
+                    await context.bot.send_message(chat_id=int(chat_id), text=msg, parse_mode="HTML")
+                    users[chat_id]["day"] += 1
+                except Exception as err:
+                    print(f"Send Error ({chat_id}): {err}")
+    
+    save_users(users)
+
+# ---------------- MAIN ----------------
 if __name__ == "__main__":
-    t = Thread(target=run_web_server)
-    t.daemon = True
-    t.start()
+    # Create Application with JobQueue enabled
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Define 5:00 PM (17:00) in India Standard Time
+    IST = pytz.timezone('Asia/Kolkata')
+    target_time = dt_time(hour=17, minute=0, second=0, tzinfo=IST)
+
+    # Schedule the daily job to run every day at 5:00 PM IST
+    application.job_queue.run_daily(send_daily_lesson, time=target_time)
+
+    # Handlers
+    application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Namaste! Lessons scheduled daily at 5:00 PM IST.")))
     
-    Thread(target=run_async_task).start() 
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    print("🤖 Bot Active. Next lesson scheduled for 5:00 PM IST.")
+    application.run_polling()

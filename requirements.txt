@@ -1,4 +1,6 @@
-python-telegram-bot==20.0
-groq
-schedule
+python-telegram-bot[job-queue]==20.0
+pandas
+openpyxl
+gTTS
 flask
+pytz
