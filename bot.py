@@ -1,19 +1,34 @@
-import os
 import json, asyncio, os, html, pytz
 import pandas as pd
 from datetime import time as dt_time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from flask import Flask
+from threading import Thread
 
-# --- Python 3.14 Event Loop Compatibility Fix ---
+# --- RENDER PORT BINDING FIX ---
+# Render expects a web server to listen on a port. We use Flask for this.
+app = Flask('')
+
+@app.route('/')
+def health_check():
+    return "Bot is running!", 200
+
+def run_flask():
+    # Render automatically assigns a PORT; defaults to 10000
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- Python 3.14 Event Loop Compatibility ---
 try:
-    asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+# Use Environment Variable for security to avoid GitHub Push Protection blocks
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_FALLBACK_TOKEN_HERE")
 LESSON_FILE = "lessons.xlsx"
 USERS_FILE = "users.json"
 
@@ -43,7 +58,6 @@ async def send_daily_lesson(context: ContextTypes.DEFAULT_TYPE):
             
             if not day_data.empty:
                 row = day_data.iloc[0]
-                # Secure formatting for Telegram HTML mode
                 h = html.escape(str(row['Hindi']))
                 e = html.escape(str(row['English']))
                 msg = f"<b>📅 Day {day} Lesson</b>\n\n<b>Hindi:</b> {h}\n<b>English:</b> {e}"
@@ -58,18 +72,26 @@ async def send_daily_lesson(context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    # Create Application with JobQueue enabled
+    # Start the Flask web server in a background thread
+    Thread(target=run_flask, daemon=True).start()
+
+    # Create Telegram Application
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Define 5:00 PM (17:00) in India Standard Time
+    # Define 5:10 PM (17:10) in India Standard Time
     IST = pytz.timezone('Asia/Kolkata')
-    target_time = dt_time(hour=17, minute=0, second=0, tzinfo=IST)
+    # Change: hour=17, minute=10
+    target_time = dt_time(hour=17, minute=10, second=0, tzinfo=IST)
 
-    # Schedule the daily job to run every day at 5:00 PM IST
-    application.job_queue.run_daily(send_daily_lesson, time=target_time)
+    # Schedule the daily job (days 0-6 = Every day)
+    application.job_queue.run_daily(
+        send_daily_lesson, 
+        time=target_time,
+        days=(0, 1, 2, 3, 4, 5, 6)
+    )
 
     # Handlers
-    application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Namaste! Lessons scheduled daily at 5:00 PM IST.")))
+    application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot Active! Lessons at 5:10 PM IST.")))
     
-    print("🤖 Bot Active. Next lesson scheduled for 5:00 PM IST.")
+    print("🤖 Bot Active. Flask listening on Port. Lessons at 5:10 PM IST.")
     application.run_polling()
