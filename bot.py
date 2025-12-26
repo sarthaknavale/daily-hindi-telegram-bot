@@ -93,9 +93,9 @@ if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Schedule for 5:10 PM IST
+    # Schedule for 6:05 PM IST
     IST = pytz.timezone('Asia/Kolkata')
-    t = dt_time(hour=17, minute=10, second=0, tzinfo=IST)
+    t = dt_time(hour=18, minute=05, second=0, tzinfo=IST)
     app_bot.job_queue.run_daily(daily_job, time=t, days=(0,1,2,3,4,5,6))
 
     app_bot.add_handler(CommandHandler("start", start))
