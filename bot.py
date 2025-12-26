@@ -1,3 +1,4 @@
+import os
 import json, asyncio, os, html, pytz
 import pandas as pd
 from datetime import time as dt_time
@@ -12,7 +13,7 @@ except RuntimeError:
     asyncio.set_event_loop(loop)
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = "8450562900:AAEVvTV_Yx_4QstbnnwAUsgiKEWLWng8cUQ"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 LESSON_FILE = "lessons.xlsx"
 USERS_FILE = "users.json"
 
