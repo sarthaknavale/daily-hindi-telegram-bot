@@ -79,7 +79,7 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     users[str(u.effective_chat.id)] = {"day": 1}
     save_users(users)
-    await u.message.reply_text("🚀 <b>Bot Active!</b>\nDaily lessons at 12:55 PM IST.\nUse /test to see today's 5 sentences.")
+    await u.message.reply_text("🚀 <b>Bot Active!</b>\nDaily lessons at 10:00 AM IST.\nUse /test to see today's 2 sentences.")
 
 async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await send_daily_bundle(u.effective_chat.id, c)
@@ -102,9 +102,9 @@ if __name__ == "__main__":
     # Enable Job Queue for scheduling
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Time: 7:15 (12:25 AM) IST
+    # Time: 4:30 (10:00 AM) IST
     IST = pytz.timezone('Asia/Kolkata')
-    target_time = dt_time(hour=7, minute=25, second=0, tzinfo=IST)
+    target_time = dt_time(hour=4, minute=30, second=0, tzinfo=IST)
     application.job_queue.run_daily(daily_job, time=target_time)
 
     application.add_handler(CommandHandler("start", start))
