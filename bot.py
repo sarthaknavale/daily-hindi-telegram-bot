@@ -102,9 +102,9 @@ if __name__ == "__main__":
     # Enable Job Queue for scheduling
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Time: 10:00 (10:00 AM) IST
+    # Time: 11:00 (11:00 AM) IST
     IST = pytz.timezone('Asia/Kolkata')
-    target_time = dt_time(hour=10, minute=0, second=0, tzinfo=IST)
+    target_time = dt_time(hour=11, minute=0, second=0, tzinfo=IST)
     application.job_queue.run_daily(daily_job, time=target_time)
 
     application.add_handler(CommandHandler("start", start))
