@@ -35,7 +35,6 @@ async def send_daily_bundle(chat_id, context):
     day = users.get(uid, {}).get("day", 1)
     
     if not os.path.exists(FILE_NAME):
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {FILE_NAME} not found on server.")
         return False
 
     try:
@@ -45,33 +44,22 @@ async def send_daily_bundle(chat_id, context):
         except:
             df = pd.read_csv(FILE_NAME)
 
-        # Clean Column Names (Removes hidden spaces)
         df.columns = df.columns.str.strip()
-
-        # Get all rows for the day
         day_rows = df[df['Day'] == day]
         
         if not day_rows.empty:
-            msg = f"<b>📅 LESSON: DAY {day}</b>\n"
-            msg += "━━━━━━━━━━━━━━━━━━\n\n"
-            
+            msg = f"<b>📅 LESSON: DAY {day}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
             for _, row in day_rows.iterrows():
                 eng = html.escape(str(row['English']))
                 h_m = html.escape(str(row['Hindi (Male)']))
                 h_f = html.escape(str(row['Hindi (Female)']))
-                
-                msg += f"🇬🇧 <b>{eng}</b>\n"
-                msg += f"👨 {h_m}\n"
-                msg += f"👩 {h_f}\n\n"
+                msg += f"🇬🇧 <b>{eng}</b>\n👨 {h_m}\n👩 {h_f}\n\n"
             
             msg += "━━━━━━━━━━━━━━━━━━"
             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             return True
-        else:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ No lessons found for Day {day}")
     except Exception as e:
-        print(f"Read Error: {e}")
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ File Error: {str(e)}")
+        print(f"Error for {chat_id}: {e}")
     return False
 
 # --- HANDLERS ---
@@ -79,30 +67,36 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     users[str(u.effective_chat.id)] = {"day": 1}
     save_users(users)
-    await u.message.reply_text("🚀 <b>Bot Active!</b>\nDaily lessons at 10:00 AM IST.\nUse /test to see today's 2 sentences.")
+    await u.message.reply_text("🚀 <b>Bot Active!</b>\nDaily lessons at 10:10 AM IST.")
 
 async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await send_daily_bundle(u.effective_chat.id, c)
 
+# --- PRO BROADCAST ENGINE ---
 async def daily_job(c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
-    for uid in users:
-        if await send_daily_bundle(int(uid), c):
+    uids = list(users.keys())
+    
+    # PRO FIX: Create parallel tasks for all users
+    tasks = [send_daily_bundle(int(uid), c) for uid in uids]
+    
+    # Run all tasks simultaneously instead of one-by-one
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Increment day only for users who successfully received the message
+    for uid, success in zip(uids, results):
+        if success is True:
             users[uid]["day"] += 1
+            
     save_users(users)
 
-# --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    if not BOT_TOKEN:
-        print("FATAL: BOT_TOKEN missing!")
-        exit(1)
+    if not BOT_TOKEN: exit(1)
 
     Thread(target=run_flask, daemon=True).start()
-    
-    # Enable Job Queue for scheduling
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Time: 10:10 (10:10 AM) IST
+    # Schedule: 10:10 AM IST
     IST = pytz.timezone('Asia/Kolkata')
     target_time = dt_time(hour=10, minute=10, second=0, tzinfo=IST)
     application.job_queue.run_daily(daily_job, time=target_time)
@@ -110,6 +104,5 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("test", test_cmd))
 
-    print("🤖 PRO Bot is starting...")
-    # drop_pending_updates=True is the ULTIMATE fix for Conflict Errors
+    # Conflict Killer
     application.run_polling(drop_pending_updates=True)
