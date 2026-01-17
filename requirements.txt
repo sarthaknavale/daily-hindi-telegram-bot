@@ -1,5 +1,11 @@
-python-telegram-bot[job-queue]
+python-telegram-bot
+google-generativeai
 pandas
 openpyxl
 flask
 pytz
+gTTS
+SpeechRecognition
+pydub
+ffmpeg-python
+Pillow
