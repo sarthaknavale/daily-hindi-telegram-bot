@@ -2,13 +2,10 @@ import json, asyncio, os, html, pytz, random
 import google.generativeai as genai
 from datetime import time as dt_time, datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from flask import Flask
 from threading import Thread
 from gtts import gTTS
-import speech_recognition as sr
-from pydub import AudioSegment
-from PIL import Image, ImageDraw, ImageFont
 
 # --- RENDER WEB SERVER ---
 app = Flask('')
@@ -32,6 +29,12 @@ model = genai.GenerativeModel('gemini-pro')
 USERS_FILE = "users.json"
 IST = pytz.timezone('Asia/Kolkata')
 
+# --- FAIL-SAFE DATA (Used if AI fails) ---
+BACKUP_LESSONS = {
+    1: {"grammar": "Greetings", "sentences": [{"eng": "Hello, how are you?", "say": "He-lo, hao are yu", "male": "नमस्ते, आप कैसे हैं?", "female": "नमस्ते, आप कैसी हैं?"}]},
+    2: {"grammar": "Introductions", "sentences": [{"eng": "My name is John.", "say": "Ma-ai ne-m iz Jawn", "male": "मेरा नाम जॉन है।", "female": "मेरा नाम जॉन है।"}]},
+}
+
 def load_users():
     try:
         with open(USERS_FILE, "r") as f: return json.load(f)
@@ -40,86 +43,92 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-# --- CERTIFICATE GENERATOR ---
-def create_certificate(name, day):
-    # Create a simple certificate image
-    img = Image.new('RGB', (800, 600), color=(255, 255, 255))
-    d = ImageDraw.Draw(img)
-    
-    # Draw a gold border
-    d.rectangle([20, 20, 780, 580], outline=(212, 175, 55), width=10)
-    
-    # Add text (Note: In a real server, ensure you have a .ttf font file path)
-    d.text((400, 150), "CERTIFICATE OF ACHIEVEMENT", fill=(0, 0, 0), anchor="mm")
-    d.text((400, 250), "This is proudly presented to", fill=(0, 0, 0), anchor="mm")
-    d.text((400, 320), name.upper(), fill=(18, 52, 86), anchor="mm")
-    d.text((400, 400), f"For completing {day} Days of English Learning", fill=(0, 0, 0), anchor="mm")
-    d.text((400, 500), f"Date: {datetime.now(IST).strftime('%d %b %Y')}", fill=(0, 0, 0), anchor="mm")
-    
-    cert_path = f"cert_{name}.png"
-    img.save(cert_path)
-    return cert_path
+# --- ROBUST AI ENGINE ---
+async def generate_lesson_content(day):
+    prompt = (f"Act as an English teacher. Create a lesson for Day {day}. "
+              "Provide 5 beginner sentences with English, Phonetic pronunciation, Hindi Male, and Hindi Female. "
+              "Return ONLY a JSON object. Format: "
+              '{"grammar": "tip", "sentences": [{"eng": "Sentence", "say": "pronunciation", "male": "Hindi", "female": "Hindi"}]}')
+    try:
+        # Timeout safety for faster response
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if "```" in text:
+            text = text.split("```")[1].replace("json", "").strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return None
 
 # --- CORE LOGIC ---
 async def send_lesson(chat_id, context, is_manual=False):
     users = load_users()
     uid = str(chat_id)
-    user = users.get(uid, {"day": 1, "streak": 0, "total_learned": 0, "name": "Learner"})
+    user = users.get(uid, {"day": 1, "streak": 0, "name": "Learner"})
+    day = user['day']
     
-    # Check for Certificate at Day 30
-    if user['day'] == 30 and not user.get('cert_sent'):
-        cert_file = create_certificate(user['name'], 30)
-        await context.bot.send_photo(chat_id=chat_id, photo=open(cert_file, 'rb'), 
-                                     caption="🎓 <b>CONGRATULATIONS!</b>\nYou have reached Day 30. Here is your certificate!")
-        user['cert_sent'] = True
-        save_users(users)
-        os.remove(cert_file)
-
-    prompt = f"English teacher. Day {user['day']} lesson. 5 sentences. JSON format: {{'grammar': '', 'sentences': [{{'eng': '', 'male': '', 'female': ''}}]}}"
-    try:
-        response = model.generate_content(prompt)
-        data = json.loads(response.text.strip().replace('```json', '').replace('```', ''))
+    # Inform user immediately
+    status = await context.bot.send_message(chat_id=chat_id, text="⏳ <b>Generating your lesson...</b>", parse_mode="HTML")
+    
+    # Try AI first
+    data = await generate_lesson_content(day)
+    
+    # If AI fails, use Backup
+    is_backup = False
+    if not data:
+        data = BACKUP_LESSONS.get(day % len(BACKUP_LESSONS) + 1)
+        is_backup = True
         
-        if is_manual:
-            now = datetime.now(IST)
-            if user.get("last_learned") != now.strftime('%Y-%m-%d'):
-                user["streak"] = user.get("streak", 0) + 1
-                user["total_learned"] = user.get("total_learned", 0) + 5
-                user["last_learned"] = now.strftime('%Y-%m-%d')
-                users[uid] = user
-                save_users(users)
+    await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
 
-        msg = f"📖 <b>DAY {user['day']}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    if data:
+        if is_manual:
+            now = datetime.now(IST).strftime('%Y-%m-%d')
+            user["streak"] = user.get("streak", 0) + 1 if user.get("last_learned") != now else user["streak"]
+            user["last_learned"] = now
+            users[uid] = user
+            save_users(users)
+
+        tag = "⚠️ (Fail-Safe Mode)" if is_backup else ""
+        msg = f"🔥 <b>STREAK: {user['streak']} DAYS</b>\n📖 <b>DAY {day}</b> {tag}\n━━━━━━━━━━━━━━━━━━\n\n"
         voice_text = ""
         for item in data['sentences']:
-            msg += f"🇬🇧 <b>{item['eng']}</b>\n👨 {item['male']}\n👩 {item['female']}\n\n"
+            msg += f"🇬🇧 <b>{item['eng']}</b>\n🗣️ <i>{item['say']}</i>\n👨 {item['male']}\n👩 {item['female']}\n\n"
             voice_text += item['eng'] + ". "
         
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", 
-                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]))
+        msg += f"💡 <b>Grammar:</b> {data['grammar']}"
         
-        v_file = f"v_{chat_id}.mp3"
-        gTTS(text=voice_text, lang='en').save(v_file)
-        with open(v_file, 'rb') as v: await context.bot.send_voice(chat_id=chat_id, voice=v)
-        os.remove(v_file)
+        btns = [[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
+        
+        # Audio delivery
+        try:
+            v_file = f"v_{chat_id}.mp3"
+            gTTS(text=voice_text, lang='en').save(v_file)
+            with open(v_file, 'rb') as v: await context.bot.send_voice(chat_id=chat_id, voice=v)
+            os.remove(v_file)
+        except: pass
         return True
-    except: return False
+    
+    await context.bot.send_message(chat_id=chat_id, text="❌ System Busy. Try /test again.")
+    return False
 
 # --- HANDLERS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     uid = str(u.effective_chat.id)
     if uid not in users:
-        users[uid] = {"day": 1, "streak": 0, "total_learned": 0, "time": "10:10", "name": u.effective_user.first_name}
+        users[uid] = {"day": 1, "streak": 0, "last_learned": "", "time": "10:10", "name": u.effective_user.first_name}
         save_users(users)
-    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\nReach Day 30 to earn your certificate! 🎓")
+    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\n/test - Start Lesson")
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
     await query.answer()
     if query.data == "next_day":
+        uid = str(u.effective_chat.id)
         users = load_users()
-        users[str(u.effective_chat.id)]["day"] += 1
+        users[uid]["day"] = users.get(uid, {}).get("day", 1) + 1
         save_users(users)
         await send_lesson(u.effective_chat.id, c, True)
 
@@ -129,4 +138,4 @@ if __name__ == "__main__":
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("test", lambda u, c: send_lesson(u.effective_chat.id, c, True)))
     app_bot.add_handler(CallbackQueryHandler(callback_handler))
-    app_bot.run_polling()
+    app_bot.run_polling(drop_pending_updates=True)
