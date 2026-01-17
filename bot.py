@@ -18,8 +18,8 @@ def run_flask():
 # ==========================================
 #        HIDDEN CONFIGURATIONS (FILL HERE)
 # ==========================================
-TOKEN = "YOUR_BOT_TOKEN_HERE" 
-MY_ID = 12345678  # Your numeric Telegram ID
+TOKEN = "8450562900:AAFMHSXkewWDqzpbxmCLKZokbL-2JlqNsoA" 
+MY_ID = 753500208  # Your numeric Telegram ID
 # ==========================================
 
 FILE_NAME = "lessons.xlsx"
@@ -34,19 +34,6 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-def update_streak(user_data):
-    now = datetime.now(IST)
-    today_str = now.strftime('%Y-%m-%d')
-    last_date_str = user_data.get("last_learned", "")
-    if last_date_str == today_str: return user_data
-    
-    last_date = datetime.strptime(last_date_str, '%Y-%m-%d').date() if last_date_str else None
-    yesterday = (now - timedelta(days=1)).date()
-    
-    user_data["streak"] = user_data.get("streak", 0) + 1 if last_date == yesterday else 1
-    user_data["last_learned"] = today_str
-    return user_data
-
 # --- CORE LOGIC ---
 async def get_day_data(day):
     if not os.path.exists(FILE_NAME): return None
@@ -60,63 +47,60 @@ async def send_lesson(chat_id, context, is_manual=False):
     users = load_users()
     uid = str(chat_id)
     user = users.get(uid, {"day": 1, "streak": 0})
-    day = user["day"]
-
-    data = await get_day_data(day)
+    
+    data = await get_day_data(user["day"])
     if data is not None and not data.empty:
+        # Update streak if they manually practiced
         if is_manual:
-            user = update_streak(user)
-            users[uid] = user
-            save_users(users)
+            now = datetime.now(IST)
+            today_str = now.strftime('%Y-%m-%d')
+            last_date_str = user.get("last_learned", "")
+            if last_date_str != today_str:
+                last_date = datetime.strptime(last_date_str, '%Y-%m-%d').date() if last_date_str else None
+                yesterday = (now - timedelta(days=1)).date()
+                user["streak"] = user.get("streak", 0) + 1 if last_date == yesterday else 1
+                user["last_learned"] = today_str
+                users[uid] = user
+                save_users(users)
 
-        header = f"🔥 <b>STREAK: {user.get('streak', 0)} DAYS</b>\n📖 <b>DAY {day}</b>"
-        msg = f"{header}\n━━━━━━━━━━━━━━━━━━\n\n"
+        msg = f"🔥 <b>STREAK: {user.get('streak', 0)} DAYS</b>\n📖 <b>DAY {user['day']}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         for _, row in data.iterrows():
-            eng = html.escape(str(row['English Sentence']))
-            h_m = html.escape(str(row['Hindi (Male)']))
-            h_f = html.escape(str(row['Hindi (Female)']))
-            msg += f"🇬🇧 <b>{eng}</b>\n👨 {h_m}\n👩 {h_f}\n\n"
+            msg += f"🇬🇧 <b>{html.escape(str(row['English Sentence']))}</b>\n👨 {html.escape(str(row['Hindi (Male)']))}\n👩 {html.escape(str(row['Hindi (Female)']))}\n\n"
         
-        keyboard = [
-            [InlineKeyboardButton("📝 Test", callback_data=f"quiz_{day}")],
-            [InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]
-        ]
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        btns = [[InlineKeyboardButton("📝 Test", callback_data=f"quiz_{user['day']}")], [InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
         return True
     return False
 
-# --- HANDLERS ---
+# --- SYSTEM HEALTH CHECK (ADMIN ONLY) ---
+async def status(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    if u.effective_user.id != MY_ID: return
+    
+    users = load_users()
+    excel_ok = os.path.exists(FILE_NAME)
+    
+    status_msg = "🖥 <b>SYSTEM HEALTH CHECK</b>\n━━━━━━━━━━━━━━━━━━\n"
+    status_msg += f"✅ <b>Bot Token:</b> Valid\n"
+    status_msg += f"{'✅' if excel_ok else '❌'} <b>Excel File:</b> {'Found' if excel_ok else 'NOT FOUND'}\n"
+    status_msg += f"👥 <b>Total Users:</b> {len(users)}\n"
+    status_msg += f"⏰ <b>Server Time:</b> {datetime.now(IST).strftime('%H:%M:%S')}\n"
+    
+    if excel_ok:
+        try:
+            df = pd.read_excel(FILE_NAME)
+            status_msg += f"📊 <b>Total Days in Excel:</b> {df['Day'].max()}\n"
+        except: status_msg += "⚠️ <b>Excel Error:</b> Cannot read rows.\n"
+        
+    await u.message.reply_html(status_msg)
+
+# --- STANDARD HANDLERS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     uid = str(u.effective_chat.id)
     if uid not in users:
-        users[uid] = {"day": 1, "streak": 0, "last_learned": datetime.now(IST).strftime('%Y-%m-%d'), "time": "10:10", "name": u.effective_user.first_name}
+        users[uid] = {"day": 1, "streak": 0, "last_learned": "", "time": "10:10", "name": u.effective_user.first_name}
         save_users(users)
-    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\n\n- /test : Start Lesson\n- /profile : See Streak\n- /leaderboard : Rankings")
-
-async def set_time(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    try:
-        t_str = c.args[0]
-        datetime.strptime(t_str, "%H:%M")
-        users = load_users()
-        users[str(u.effective_chat.id)]["time"] = t_str
-        save_users(users)
-        await u.message.reply_text(f"✅ Time set to {t_str} IST!")
-    except:
-        await u.message.reply_text("❌ Use: /settime 08:30")
-
-async def profile(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    users = load_users()
-    user = users.get(str(u.effective_chat.id), {"day": 1, "streak": 0})
-    await u.message.reply_html(f"👤 <b>PROFILE</b>\nDay: {user['day']}\nStreak: {user['streak']} Days")
-
-async def leaderboard(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    users = load_users()
-    sorted_users = sorted(users.items(), key=lambda x: x[1].get('streak', 0), reverse=True)
-    msg = "🏆 <b>TOP 10 LEARNERS</b>\n━━━━━━━━━━━━━━━━━━\n"
-    for i, (uid, data) in enumerate(sorted_users[:10], 1):
-        msg += f"{'🥇' if i==1 else '🥈' if i==2 else '🥉' if i==3 else '🔹'} {data.get('name', 'User')} — <b>{data.get('streak', 0)} Days</b>\n"
-    await u.message.reply_html(msg)
+    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\n/test - Start\n/profile - Progress")
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
@@ -128,7 +112,6 @@ async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
         users[uid]["day"] += 1
         save_users(users)
         await send_lesson(u.effective_chat.id, c, True)
-    
     elif "quiz_" in query.data:
         day = int(query.data.split("_")[1])
         data = await get_day_data(day)
@@ -136,39 +119,21 @@ async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
             row = data.sample(n=1).iloc[0]
             await query.message.reply_html(f"<b>QUIZ</b>\n🇬🇧 <code>{row['English Sentence']}</code>", 
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👁 Reveal", callback_data=f"reveal_{day}_{row.name}")]]))
-
     elif "reveal_" in query.data:
         _, day, row_idx = query.data.split("_")
-        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
+        df = pd.read_excel(FILE_NAME)
         row = df.iloc[int(row_idx)]
-        await query.message.reply_html(f"✅ <b>Answer:</b>\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}", 
+        await query.message.reply_html(f"✅ <b>Answer</b>\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}", 
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]))
 
-# --- SCHEDULER & REMINDERS ---
+# --- SCHEDULER ---
 async def global_scheduler(context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
-    now = datetime.now(IST)
-    now_time = now.strftime("%H:%M")
-    today_date = now.date()
-
+    now_time = datetime.now(IST).strftime("%H:%M")
     for uid, data in users.items():
-        # 1. SEND DAILY LESSON
         if data.get("time", "10:10") == now_time:
             if await send_lesson(int(uid), context):
                 data["day"] += 1
-        
-        # 2. SEND INACTIVE REMINDER (Check once a day at 6:00 PM)
-        if now_time == "18:00":
-            last_learned_str = data.get("last_learned", "")
-            if last_learned_str:
-                last_learned_date = datetime.strptime(last_learned_str, '%Y-%m-%d').date()
-                days_inactive = (today_date - last_learned_date).days
-                if days_inactive >= 2:
-                    try:
-                        await context.bot.send_message(chat_id=int(uid), 
-                            text="⚠️ <b>Don't lose your streak!</b>\nYou haven't practiced in 2 days. Click /test to continue learning! 🔥", 
-                            parse_mode="HTML")
-                    except: pass
     save_users(users)
 
 if __name__ == "__main__":
@@ -177,9 +142,7 @@ if __name__ == "__main__":
     app_bot.job_queue.run_repeating(global_scheduler, interval=60, first=10)
     
     app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("settime", set_time))
-    app_bot.add_handler(CommandHandler("profile", profile))
-    app_bot.add_handler(CommandHandler("leaderboard", leaderboard))
+    app_bot.add_handler(CommandHandler("status", status))
     app_bot.add_handler(CommandHandler("test", lambda u, c: send_lesson(u.effective_chat.id, c, True)))
     app_bot.add_handler(CallbackQueryHandler(callback_handler))
     
