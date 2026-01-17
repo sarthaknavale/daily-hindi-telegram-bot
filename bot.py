@@ -1,6 +1,6 @@
 import json, asyncio, os, html, pytz, random
 import pandas as pd
-from datetime import time as dt_time
+from datetime import time as dt_time, datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from flask import Flask
@@ -17,8 +17,9 @@ def run_flask():
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-FILE_NAME = "lessons.xlsx" 
+ADMIN_ID = 12345678  # 👈 REPLACE WITH YOUR ID
 USERS_FILE = "users.json"
+FILE_NAME = "lessons.xlsx"
 
 def load_users():
     try:
@@ -28,126 +29,97 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-# --- CORE LESSON ENGINE ---
+# --- CORE LOGIC ---
 async def get_day_data(day):
     if not os.path.exists(FILE_NAME): return None
     try:
-        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
+        df = pd.read_excel(FILE_NAME)
         df.columns = df.columns.str.strip()
-        day_rows = df[df['Day'] == day].head(5)
-        return day_rows if not day_rows.empty else None
-    except Exception as e:
-        print(f"Excel Error: {e}")
-        return None
+        return df[df['Day'] == day].head(5)
+    except: return None
 
-async def send_daily_bundle(chat_id, context, is_manual=False):
+async def send_lesson(chat_id, context, is_manual=False):
     users = load_users()
     uid = str(chat_id)
-    day = users.get(uid, {}).get("day", 1)
-    
+    user = users.get(uid, {"day": 1, "lang": "Hindi", "streak": 0})
+    lang = user.get("lang", "Hindi")
+    day = user["day"]
+
     data = await get_day_data(day)
-    if data is not None:
-        header = f"📖 <b>DAY {day}: TODAY'S 5 SENTENCES</b>"
-        msg = f"{header}\n━━━━━━━━━━━━━━━━━━\n\n"
-        
+    if data is not None and not data.empty:
+        msg = f"🌍 <b>LANGUAGE: {lang}</b> | 🔥 <b>STREAK: {user.get('streak', 0)}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         for _, row in data.iterrows():
             eng = html.escape(str(row['English Sentence']))
-            h_m = html.escape(str(row['Hindi (Male)']))
-            h_f = html.escape(str(row['Hindi (Female)']))
-            note = html.escape(str(row.get('Note', '')))
-            
-            msg += f"🇬🇧 <b>{eng}</b>\n👨 {h_m}\n👩 {h_f}\n"
-            if note and note.lower() != "nan": msg += f"📝 <i>{note}</i>\n"
-            msg += "\n"
+            male = html.escape(str(row.get(f'{lang} (Male)', 'N/A')))
+            female = html.escape(str(row.get(f'{lang} (Female)', 'N/A')))
+            msg += f"🇬🇧 {eng}\n👨 {male}\n👩 {female}\n\n"
         
-        msg += "━━━━━━━━━━━━━━━━━━"
-        
-        # NAVIGATION BUTTONS
-        keyboard = [
-            [InlineKeyboardButton("📝 Take Quick Test", callback_data=f"quiz_{day}")],
-            [InlineKeyboardButton("⏭️ Skip to Next Day", callback_data="next_day")]
-        ]
-        
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text=msg, 
-            parse_mode="HTML", 
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        keyboard = [[InlineKeyboardButton("📝 Test", callback_data=f"quiz_{day}")], [InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
-    else:
-        if is_manual:
-            await context.bot.send_message(chat_id=chat_id, text="✨ You have completed all available lessons!")
-        return False
+    return False
 
 # --- HANDLERS ---
-async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    users = load_users()
-    uid = str(u.effective_chat.id)
-    if uid not in users:
-        users[uid] = {"day": 1}
+async def set_time(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Usage: /settime 08:30"""
+    try:
+        t_str = c.args[0]
+        datetime.strptime(t_str, "%H:%M") # Validate format
+        users = load_users()
+        users[str(u.effective_chat.id)]["time"] = t_str
         save_users(users)
-    await u.message.reply_html("🚀 <b>Learning Bot Active!</b>\n\n- Daily 5 sentences at 10:10 AM.\n- Use /test to practice now.\n- Use the buttons to move faster!")
+        await u.message.reply_text(f"⏰ Daily lesson time set to {t_str} IST!")
+    except:
+        await u.message.reply_text("❌ Use format: /settime HH:MM (e.g., /settime 09:15)")
 
-async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
+async def language_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("Hindi", callback_data="setlang_Hindi"), 
+         InlineKeyboardButton("Spanish", callback_data="setlang_Spanish")]
+    ]
+    await u.message.reply_text("🌐 Choose your target language:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
     uid = str(u.effective_chat.id)
-    data_parts = query.data.split("_")
-    action = data_parts[0]
-    
     await query.answer()
 
-    if action == "next": # Next Day logic
+    if "setlang_" in query.data:
+        lang = query.data.split("_")[1]
         users = load_users()
-        users[uid]["day"] = users.get(uid, {}).get("day", 1) + 1
+        users[uid]["lang"] = lang
         save_users(users)
-        await query.message.reply_text(f"✅ Progressed to Day {users[uid]['day']}!")
-        await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
+        await query.edit_message_text(f"✅ Language set to {lang}!")
+    
+    elif "next_day" in query.data:
+        users = load_users()
+        users[uid]["day"] += 1
+        save_users(users)
+        await send_lesson(u.effective_chat.id, c, True)
 
-    elif action == "quiz":
-        day = int(data_parts[1])
-        data = await get_day_data(day)
-        if data is not None:
-            random_row = data.sample(n=1).iloc[0]
-            question = random_row['English Sentence']
-            # Store the index in callback to reveal later
-            keyboard = [[InlineKeyboardButton("👁 Reveal Answer", callback_data=f"reveal_{day}_{random_row.name}")]]
-            await query.message.reply_html(f"<b>QUIZ: Translate this!</b>\n\n🇬🇧 <code>{question}</code>", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif action == "reveal":
-        day = int(data_parts[1])
-        row_idx = int(data_parts[2])
-        # Re-read to get correct row
-        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
-        row = df.iloc[row_idx]
-        
-        ans_msg = f"✅ <b>Answer:</b>\n\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}\n\n<i>Ready for tomorrow?</i>"
-        keyboard = [[InlineKeyboardButton("⏭️ Start Next Day Now", callback_data="next_day")]]
-        await query.message.reply_html(ans_msg, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# --- BROADCAST ENGINE ---
-async def daily_job(c: ContextTypes.DEFAULT_TYPE):
+# --- PER-USER SCHEDULER ---
+async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
+    """Runs every minute to see who needs a message now"""
     users = load_users()
-    for uid in list(users.keys()):
-        success = await send_daily_bundle(int(uid), c)
-        if success:
-            users[uid]["day"] += 1
-            save_users(users)
-        await asyncio.sleep(0.05) 
+    now_ist = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M")
+    
+    for uid, data in users.items():
+        user_time = data.get("time", "10:10") # Default
+        if now_ist == user_time:
+            await send_lesson(int(uid), context)
+            data["day"] += 1
+    save_users(users)
 
 if __name__ == "__main__":
-    if not BOT_TOKEN: exit(1)
     Thread(target=run_flask, daemon=True).start()
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Check every minute for custom times
+    app_bot.job_queue.run_repeating(check_and_send, interval=60, first=10)
 
-    IST = pytz.timezone('Asia/Kolkata')
-    application.job_queue.run_daily(daily_job, time=dt_time(hour=10, minute=10, tzinfo=IST))
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("test", test_cmd))
-    application.add_handler(CallbackQueryHandler(callback_handler))
-
-    application.run_polling(drop_pending_updates=True)
+    app_bot.add_handler(CommandHandler("start", start)) # reuse previous start
+    app_bot.add_handler(CommandHandler("settime", set_time))
+    app_bot.add_handler(CommandHandler("language", language_cmd))
+    app_bot.add_handler(CallbackQueryHandler(callback_handler))
+    
+    app_bot.run_polling()
