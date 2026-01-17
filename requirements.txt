@@ -1,7 +1,5 @@
-python-telegram-bot
 google-generativeai
-pandas
-openpyxl
+python-telegram-bot
 flask
 pytz
 gTTS
