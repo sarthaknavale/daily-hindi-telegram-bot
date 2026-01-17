@@ -1,119 +1,153 @@
-import json, os, html, asyncio, time
-import google.generativeai as genai
+import json, asyncio, os, html, pytz, random
+import pandas as pd
+from datetime import time as dt_time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from flask import Flask
 from threading import Thread
 
-# --- WEB SERVER ---
+# --- RENDER WEB SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "OK", 200
+def home(): return "BOT_ONLINE", 200
 
 def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
-# ==========================================
-#        CONFIG (STRICTLY USE FLASH)
-# ==========================================
-TOKEN = "8450562900:AAFMHSXkewWDqzpbxmCLKZokbL-2JlqNsoA" 
-GEMINI_API_KEY = "AIzaSyD6qw18ecUshcqPRNFWWTTliFEmdVHd7ZQ"
+# --- CONFIGURATION ---
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+FILE_NAME = "lessons.xlsx" 
 USERS_FILE = "users.json"
-# ==========================================
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-# --- BACKUP LESSONS (Used only if AI is totally dead) ---
-OFFLINE_LESSONS = {
-    1: {"sentences": [{"eng": "The weather is nice today.", "hin": "आज मौसम अच्छा है।"}, {"eng": "I am learning English.", "hin": "मैं अंग्रेजी सीख रहा हूँ।"}]},
-    2: {"sentences": [{"eng": "Where is the nearest station?", "hin": "सबसे पास का स्टेशन कहाँ है?"}, {"eng": "I need some help.", "hin": "मुझे कुछ मदद चाहिए।"}]}
-}
-
-def load_db():
-    if not os.path.exists(USERS_FILE): return {}
+def load_users():
     try:
         with open(USERS_FILE, "r") as f: return json.load(f)
     except: return {}
 
-def save_db(data):
-    with open(USERS_FILE, "w") as f: json.dump(data, f, indent=2)
+def save_users(users):
+    with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-# --- THE STUBBORN ENGINE WITH OFFLINE FALLBACK ---
-async def fetch_ai_lesson(day, retries=5):
-    prompt = (f"English Teacher. Day {day} lesson. 5 beginner sentences. "
-              "Return ONLY JSON: {'sentences': [{'eng': '', 'hin': ''}]}")
-    
-    for i in range(retries):
-        try:
-            # Short timeout to prevent hanging
-            response = await asyncio.wait_for(asyncio.to_thread(model.generate_content, prompt), timeout=10)
-            clean_text = response.text.strip().replace('```json', '').replace('```', '')
-            return json.loads(clean_text)
-        except Exception:
-            await asyncio.sleep((i + 1) * 2)
-            continue
-    
-    # --- FALLBACK ---
-    print(f"AI Failed after 5 tries. Using Offline Backup for Day {day}.")
-    return OFFLINE_LESSONS.get(day, OFFLINE_LESSONS[1])
+# --- CORE LESSON ENGINE ---
+async def get_day_data(day):
+    if not os.path.exists(FILE_NAME): return None
+    try:
+        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
+        df.columns = df.columns.str.strip()
+        day_rows = df[df['Day'] == day].head(5)
+        return day_rows if not day_rows.empty else None
+    except Exception as e:
+        print(f"Excel Error: {e}")
+        return None
 
+async def send_daily_bundle(chat_id, context, is_manual=False):
+    users = load_users()
+    uid = str(chat_id)
+    day = users.get(uid, {}).get("day", 1)
+    
+    data = await get_day_data(day)
+    if data is not None:
+        header = f"📖 <b>DAY {day}: TODAY'S 5 SENTENCES</b>"
+        msg = f"{header}\n━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for _, row in data.iterrows():
+            eng = html.escape(str(row['English Sentence']))
+            h_m = html.escape(str(row['Hindi (Male)']))
+            h_f = html.escape(str(row['Hindi (Female)']))
+            note = html.escape(str(row.get('Note', '')))
+            
+            msg += f"🇬🇧 <b>{eng}</b>\n👨 {h_m}\n👩 {h_f}\n"
+            if note and note.lower() != "nan": msg += f"📝 <i>{note}</i>\n"
+            msg += "\n"
+        
+        msg += "━━━━━━━━━━━━━━━━━━"
+        
+        # NAVIGATION BUTTONS
+        keyboard = [
+            [InlineKeyboardButton("📝 Take Quick Test", callback_data=f"quiz_{day}")],
+            [InlineKeyboardButton("⏭️ Skip to Next Day", callback_data="next_day")]
+        ]
+        
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text=msg, 
+            parse_mode="HTML", 
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return True
+    else:
+        if is_manual:
+            await context.bot.send_message(chat_id=chat_id, text="✨ You have completed all available lessons!")
+        return False
+
+# --- HANDLERS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    users = load_users()
     uid = str(u.effective_chat.id)
-    db = load_db()
-    if uid not in db:
-        db[uid] = {"day": 1, "next_lesson": None}
-        save_db(db)
-    await u.message.reply_html("🚀 <b>Bot Active!</b>\nUse /test for an instant lesson.")
+    if uid not in users:
+        users[uid] = {"day": 1}
+        save_users(users)
+    await u.message.reply_html("🚀 <b>Learning Bot Active!</b>\n\n- Daily 5 sentences at 10:10 AM.\n- Use /test to practice now.\n- Use the buttons to move faster!")
 
 async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    uid = str(u.effective_chat.id)
-    db = load_db()
-    user = db.get(uid, {"day": 1, "next_lesson": None})
-
-    if user.get("next_lesson"):
-        data = user["next_lesson"]
-        user["next_lesson"] = None
-        is_cached = True
-    else:
-        msg = await u.message.reply_text("⏳ <i>Connecting to Gemini AI...</i>", parse_mode="HTML")
-        data = await fetch_ai_lesson(user['day'])
-        await c.bot.delete_message(chat_id=uid, message_id=msg.message_id)
-        is_cached = False
-
-    if data:
-        txt = f"📖 <b>DAY {user['day']}</b>\n\n"
-        for s in data['sentences']:
-            txt += f"🇬🇧 <code>{html.escape(s['eng'])}</code>\n🇮🇳 {html.escape(s['hin'])}\n\n"
-        
-        btns = [[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
-        await u.message.reply_html(txt, reply_markup=InlineKeyboardMarkup(btns))
-        
-        user['day'] += 1
-        db[uid] = user
-        save_db(db)
-        
-        # Pre-fetch for tomorrow (Quietly)
-        asyncio.create_task(background_prefetch(uid, user['day']))
-
-async def background_prefetch(uid, day):
-    db = load_db()
-    if uid in db:
-        lesson = await fetch_ai_lesson(day)
-        db = load_db() # Refresh db before saving
-        db[uid]["next_lesson"] = lesson
-        save_db(db)
+    await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
+    uid = str(u.effective_chat.id)
+    data_parts = query.data.split("_")
+    action = data_parts[0]
+    
     await query.answer()
-    if query.data == "next_day":
-        await test_cmd(u, c)
+
+    if action == "next": # Next Day logic
+        users = load_users()
+        users[uid]["day"] = users.get(uid, {}).get("day", 1) + 1
+        save_users(users)
+        await query.message.reply_text(f"✅ Progressed to Day {users[uid]['day']}!")
+        await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
+
+    elif action == "quiz":
+        day = int(data_parts[1])
+        data = await get_day_data(day)
+        if data is not None:
+            random_row = data.sample(n=1).iloc[0]
+            question = random_row['English Sentence']
+            # Store the index in callback to reveal later
+            keyboard = [[InlineKeyboardButton("👁 Reveal Answer", callback_data=f"reveal_{day}_{random_row.name}")]]
+            await query.message.reply_html(f"<b>QUIZ: Translate this!</b>\n\n🇬🇧 <code>{question}</code>", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif action == "reveal":
+        day = int(data_parts[1])
+        row_idx = int(data_parts[2])
+        # Re-read to get correct row
+        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
+        row = df.iloc[row_idx]
+        
+        ans_msg = f"✅ <b>Answer:</b>\n\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}\n\n<i>Ready for tomorrow?</i>"
+        keyboard = [[InlineKeyboardButton("⏭️ Start Next Day Now", callback_data="next_day")]]
+        await query.message.reply_html(ans_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- BROADCAST ENGINE ---
+async def daily_job(c: ContextTypes.DEFAULT_TYPE):
+    users = load_users()
+    for uid in list(users.keys()):
+        success = await send_daily_bundle(int(uid), c)
+        if success:
+            users[uid]["day"] += 1
+            save_users(users)
+        await asyncio.sleep(0.05) 
 
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    bot = ApplicationBuilder().token(TOKEN).build()
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(CommandHandler("test", test_cmd))
-    bot.add_handler(CallbackQueryHandler(callback_handler))
-    bot.run_polling(drop_pending_updates=True)
+    if not BOT_TOKEN: exit(1)
+    Thread(target=run_flask, daemon=True).start()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    IST = pytz.timezone('Asia/Kolkata')
+    application.job_queue.run_daily(daily_job, time=dt_time(hour=10, minute=10, tzinfo=IST))
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("test", test_cmd))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+
+    application.run_polling(drop_pending_updates=True)
