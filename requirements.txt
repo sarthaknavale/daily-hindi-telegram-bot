@@ -1,9 +1,6 @@
-google-generativeai
 python-telegram-bot
-flask
+pandas
+openpyxl
 pytz
-gTTS
-SpeechRecognition
-pydub
-ffmpeg-python
-Pillow
+flask
+gunicorn
