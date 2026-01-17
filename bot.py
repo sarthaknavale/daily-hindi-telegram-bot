@@ -1,6 +1,6 @@
 import json, asyncio, os, html, pytz, random
 import pandas as pd
-from datetime import time as dt_time, datetime, timedelta
+from datetime import time as dt_time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from flask import Flask
@@ -17,7 +17,7 @@ def run_flask():
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = 12345678  # 👈 REPLACE WITH YOUR TELEGRAM ID
+ADMIN_ID = 12345678  # 👈 REPLACE WITH YOUR TELEGRAM ID (Find it via @userinfobot)
 FILE_NAME = "lessons.xlsx" 
 USERS_FILE = "users.json"
 
@@ -29,127 +29,135 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, "w") as f: json.dump(users, f, indent=2)
 
-def update_streak(user_data):
-    now = datetime.now(pytz.timezone('Asia/Kolkata'))
-    today_str = now.strftime('%Y-%m-%d')
-    last_date_str = user_data.get("last_learned", "")
-    
-    if last_date_str == today_str: return user_data
-    
-    last_date = datetime.strptime(last_date_str, '%Y-%m-%d').date() if last_date_str else None
-    yesterday = (now - timedelta(days=1)).date()
-    
-    if last_date == yesterday:
-        user_data["streak"] = user_data.get("streak", 0) + 1
-    else:
-        user_data["streak"] = 1
-        
-    user_data["last_learned"] = today_str
-    return user_data
-
-# --- CORE ENGINE ---
+# --- CORE LESSON ENGINE ---
 async def get_day_data(day):
     if not os.path.exists(FILE_NAME): return None
     try:
         df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
         df.columns = df.columns.str.strip()
-        return df[df['Day'] == day].head(5)
-    except: return None
+        day_rows = df[df['Day'] == day].head(5)
+        return day_rows if not day_rows.empty else None
+    except Exception as e:
+        print(f"Excel Error: {e}")
+        return None
 
 async def send_daily_bundle(chat_id, context, is_manual=False):
     users = load_users()
     uid = str(chat_id)
-    user_info = users.get(uid, {"day": 1, "streak": 0, "name": "Learner"})
-    day = user_info["day"]
+    day = users.get(uid, {}).get("day", 1)
     
     data = await get_day_data(day)
-    if data is not None and not data.empty:
-        if is_manual:
-            users[uid] = update_streak(user_info)
-            save_users(users)
-
-        header = f"🔥 <b>STREAK: {users[uid].get('streak', 0)} DAYS</b>\n📖 <b>DAY {day}</b>"
+    if data is not None:
+        header = f"📖 <b>DAY {day}: TODAY'S 5 SENTENCES</b>"
         msg = f"{header}\n━━━━━━━━━━━━━━━━━━\n\n"
-        for _, row in data.iterrows():
-            msg += f"🇬🇧 <b>{html.escape(str(row['English Sentence']))}</b>\n👨 {html.escape(str(row['Hindi (Male)']))}\n👩 {html.escape(str(row['Hindi (Female)']))}\n\n"
         
-        keyboard = [[InlineKeyboardButton("📝 Test", callback_data=f"quiz_{day}")], [InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
+        for _, row in data.iterrows():
+            eng = html.escape(str(row['English Sentence']))
+            h_m = html.escape(str(row['Hindi (Male)']))
+            h_f = html.escape(str(row['Hindi (Female)']))
+            note = html.escape(str(row.get('Note', '')))
+            
+            msg += f"🇬🇧 <b>{eng}</b>\n👨 {h_m}\n👩 {h_f}\n"
+            if note and note.lower() != "nan": msg += f"📝 <i>{note}</i>\n"
+            msg += "\n"
+        
+        msg += "━━━━━━━━━━━━━━━━━━"
+        
+        keyboard = [
+            [InlineKeyboardButton("📝 Take Quick Test", callback_data=f"quiz_{day}")],
+            [InlineKeyboardButton("⏭️ Skip to Next Day", callback_data="next_day")]
+        ]
+        
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
-    return False
-
-# --- NEW HANDLER: LEADERBOARD ---
-async def leaderboard(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    users = load_users()
-    # Sort users by streak descending
-    sorted_users = sorted(users.items(), key=lambda x: x[1].get('streak', 0), reverse=True)
-    
-    msg = "🏆 <b>TOP 10 LEARNERS</b>\n━━━━━━━━━━━━━━━━━━\n"
-    for i, (uid, data) in enumerate(sorted_users[:10], 1):
-        streak = data.get('streak', 0)
-        name = data.get('name', f"User {uid[-4:]}") # Show last 4 digits for privacy
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
-        msg += f"{medal} {name} — <b>{streak} Days</b>\n"
-    
-    msg += "\n━━━━━━━━━━━━━━━━━━\nKeep learning to climb the ranks!"
-    await u.message.reply_html(msg)
+    else:
+        if is_manual:
+            await context.bot.send_message(chat_id=chat_id, text="✨ No more lessons available in the sheet!")
+        return False
 
 # --- HANDLERS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     uid = str(u.effective_chat.id)
     if uid not in users:
-        users[uid] = {"day": 1, "streak": 0, "last_learned": "", "name": u.effective_user.first_name}
+        users[uid] = {"day": 1}
         save_users(users)
-    await u.message.reply_html("🚀 <b>Active!</b>\n/test - Start\n/profile - Progress\n/leaderboard - Ranking")
+    await u.message.reply_html("🚀 <b>Bot Active!</b>\n\n- 5 Sentences daily @ 10:10 AM\n- /test for current lesson\n- Use buttons to progress faster.")
 
-async def profile(u: Update, c: ContextTypes.DEFAULT_TYPE):
+async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
+
+async def broadcast(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Admin only: /broadcast Your Message Here"""
+    if u.effective_user.id != ADMIN_ID: return
+    
+    text = " ".join(c.args)
+    if not text:
+        await u.message.reply_text("Please provide a message. Example: /broadcast Hello everyone!")
+        return
+
     users = load_users()
-    user = users.get(str(u.effective_chat.id), {"day": 1, "streak": 0})
-    await u.message.reply_html(f"👤 <b>PROFILE</b>\nDay: {user['day']}\nStreak: {user['streak']} Days")
+    count = 0
+    for uid in users.keys():
+        try:
+            await c.bot.send_message(chat_id=int(uid), text=f"📢 <b>ANNOUNCEMENT</b>\n\n{text}", parse_mode="HTML")
+            count += 1
+            await asyncio.sleep(0.05)
+        except: continue
+    await u.message.reply_text(f"✅ Broadcast sent to {count} users.")
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
     uid = str(u.effective_chat.id)
+    data_parts = query.data.split("_")
+    
     await query.answer()
 
     if "next_day" in query.data:
         users = load_users()
-        users[uid]["day"] += 1
-        users[uid] = update_streak(users[uid])
+        users[uid]["day"] = users.get(uid, {}).get("day", 1) + 1
         save_users(users)
-        await send_daily_bundle(u.effective_chat.id, c, True)
-    elif "quiz_" in query.data:
-        day = int(query.data.split("_")[1])
+        await query.message.reply_text(f"✅ Level up! You are now on Day {users[uid]['day']}.")
+        await send_daily_bundle(u.effective_chat.id, c, is_manual=True)
+
+    elif data_parts[0] == "quiz":
+        day = int(data_parts[1])
         data = await get_day_data(day)
         if data is not None:
-            row = data.sample(n=1).iloc[0]
-            await query.message.reply_html(f"<b>QUIZ</b>\n🇬🇧 <code>{row['English Sentence']}</code>", 
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👁 Reveal", callback_data=f"reveal_{day}_{row.name}")]]))
-    elif "reveal_" in query.data:
-        _, day, row_idx = query.data.split("_")
-        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
-        row = df.iloc[int(row_idx)]
-        await query.message.reply_html(f"✅ <b>Answer</b>\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}", 
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]))
+            random_row = data.sample(n=1).iloc[0]
+            question = random_row['English Sentence']
+            keyboard = [[InlineKeyboardButton("👁 Reveal Answer", callback_data=f"reveal_{day}_{random_row.name}")]]
+            await query.message.reply_html(f"<b>QUIZ: Translate this!</b>\n\n🇬🇧 <code>{question}</code>", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# --- BROADCAST & JOB ---
+    elif data_parts[0] == "reveal":
+        day = int(data_parts[1])
+        row_idx = int(data_parts[2])
+        df = pd.read_excel(FILE_NAME) if FILE_NAME.endswith('.xlsx') else pd.read_csv(FILE_NAME)
+        row = df.iloc[row_idx]
+        ans = f"✅ <b>Answer:</b>\n\n👨 {row['Hindi (Male)']}\n👩 {row['Hindi (Female)']}"
+        await query.message.reply_html(ans, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]))
+
+# --- BROADCAST ENGINE ---
 async def daily_job(c: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     for uid in list(users.keys()):
-        if await send_daily_bundle(int(uid), c):
+        success = await send_daily_bundle(int(uid), c)
+        if success:
             users[uid]["day"] += 1
             save_users(users)
         await asyncio.sleep(0.05)
 
 if __name__ == "__main__":
+    if not BOT_TOKEN: exit(1)
     Thread(target=run_flask, daemon=True).start()
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
     IST = pytz.timezone('Asia/Kolkata')
-    app_bot.job_queue.run_daily(daily_job, time=dt_time(hour=10, minute=10, tzinfo=IST))
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("profile", profile))
-    app_bot.add_handler(CommandHandler("leaderboard", leaderboard))
-    app_bot.add_handler(CommandHandler("test", lambda u, c: send_daily_bundle(u.effective_chat.id, c, True)))
-    app_bot.add_handler(CallbackQueryHandler(callback_handler))
-    app_bot.run_polling(drop_pending_updates=True)
+    application.job_queue.run_daily(daily_job, time=dt_time(hour=10, minute=10, tzinfo=IST))
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("test", test_cmd))
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+
+    application.run_polling(drop_pending_updates=True)
