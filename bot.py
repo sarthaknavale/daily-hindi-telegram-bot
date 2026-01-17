@@ -1,4 +1,4 @@
-import json, asyncio, os, html, pytz
+import json, asyncio, os, html, pytz, time
 import google.generativeai as genai
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -39,86 +39,71 @@ def save_users(users):
 
 # --- AI ENGINE ---
 async def fetch_ai_lesson(day):
-    prompt = (f"English teacher. Day {day} lesson. 5 sentences. "
-              "Return ONLY JSON: {'grammar': 'tip', 'sentences': [{'eng': '..', 'say': '..', 'male': '..', 'female': '..'}]}")
+    prompt = (f"Act as an English teacher. Create a beginner lesson for Day {day}. "
+              "Provide 5 sentences with English, Phonetic pronunciation, Hindi Male, and Hindi Female. "
+              "Return ONLY a JSON object: "
+              '{"grammar": "tip", "sentences": [{"eng": "Sentence", "say": "pronunciation", "male": "Hindi", "female": "Hindi"}]}')
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
         if "```" in text:
             text = text.split("```")[1].replace("json", "").strip()
         return json.loads(text)
-    except: return None
+    except:
+        return None
 
 # --- UI DELIVERY ---
-async def send_lesson_ui(chat_id, context, data, day, streak, is_review=False):
-    tag = "⏮️ <b>REVIEW: DAY " if is_review else "📖 <b>DAY "
-    msg = f"🔥 <b>STREAK: {streak} DAYS</b>\n{tag}{day}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
-    
+async def send_lesson_ui(chat_id, context, data, day, streak):
+    msg = f"🔥 <b>STREAK: {streak} DAYS</b>\n📖 <b>DAY {day}</b>\n━━━━━━━━━━━━━━━━━━\n\n"
     for i, item in enumerate(data.get('sentences', [])):
         msg += f"{i+1}. 🇬🇧 <b>{item['eng']}</b>\n🗣️ <i>{item['say']}</i>\n👨 {item['male']}\n👩 {item['female']}\n\n"
-
     msg += f"💡 <b>Grammar:</b> {data.get('grammar', 'Keep practicing!')}"
     
-    btns = [
-        [InlineKeyboardButton(f"🔖 Save {i+1}", callback_data=f"save_{i}") for i in range(5)],
-        [InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")],
-        [InlineKeyboardButton("⏮️ Review Yesterday", callback_data="review_prev")]
-    ]
-    if is_review:
-        btns = [[InlineKeyboardButton("🔙 Back to Today", callback_data="back_today")]]
-
+    btns = [[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
 
 # --- COMMANDS ---
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     uid = str(u.effective_chat.id)
     users = load_users()
+    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\nType /test to start.")
     
-    # Always send a welcome message immediately
-    await u.message.reply_html(f"🚀 <b>Welcome {u.effective_user.first_name}!</b>\nPreparing your AI lessons...")
-
-    if uid not in users or not users[uid].get("current_lesson"):
-        curr = await fetch_ai_lesson(1)
-        users[uid] = {
-            "day": 1, "streak": 0, "last_learned": "", "vocab": [],
-            "current_lesson": curr, "next_lesson": None, "prev_lesson": None,
-            "name": u.effective_user.first_name
-        }
+    if uid not in users:
+        users[uid] = {"day": 1, "streak": 0, "last_learned": "", "current_lesson": None}
         save_users(users)
+
+async def status_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Admin tool to check bot health"""
+    start_time = time.time()
+    ai_check = await fetch_ai_lesson(0) # Test ping
+    latency = round(time.time() - start_time, 2)
     
-    await u.message.reply_html("✅ <b>Ready!</b>\nUse /test for your lesson.\nUse /vocabulary for saved sentences.")
+    status = (
+        "🖥 <b>SYSTEM STATUS</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <b>AI Connection:</b> {'✅ Online' if ai_check else '❌ Offline'}\n"
+        f"⚡ <b>AI Latency:</b> {latency}s\n"
+        f"📁 <b>Database:</b> {'✅ Ready' if os.path.exists(USERS_FILE) else '⚠️ Empty'}\n"
+        f"⏰ <b>Server Time:</b> {datetime.now(IST).strftime('%H:%M:%S')}"
+    )
+    await u.message.reply_html(status)
 
 async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     uid = str(u.effective_chat.id)
     users = load_users()
-    user = users.get(uid)
-    
-    if not user or not user.get("current_lesson"):
-        await u.message.reply_text("❌ Data not found. Please type /start first.")
-        return
+    user = users.get(uid, {"day": 1, "streak": 0, "last_learned": "", "current_lesson": None})
 
-    # Update streak
-    now = datetime.now(IST).strftime('%Y-%m-%d')
-    if user.get("last_learned") != now:
-        user["streak"] = user.get("streak", 0) + 1
-        user["last_learned"] = now
+    # AUTO-REPAIR
+    if not user.get("current_lesson"):
+        wait = await u.message.reply_text("🛠 <b>Generating initial data...</b>", parse_mode="HTML")
+        user["current_lesson"] = await fetch_ai_lesson(user['day'])
+        users[uid] = user
         save_users(users)
+        await c.bot.delete_message(chat_id=uid, message_id=wait.message_id)
 
-    await send_lesson_ui(u.effective_chat.id, c, user["current_lesson"], user["day"], user["streak"])
-
-async def vocab_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    users = load_users()
-    user = users.get(str(u.effective_chat.id), {})
-    vocab = user.get("vocab", [])
-    
-    if not vocab:
-        await u.message.reply_text("🔖 Your vocabulary list is empty. Use the Save buttons in a lesson!")
-        return
-    
-    msg = "📂 <b>MY VOCABULARY (Last 10)</b>\n━━━━━━━━━━━━━━━━━━\n\n"
-    for item in vocab[-10:]:
-        msg += f"• 🇬🇧 {item['eng']}\n  🇮🇳 {item['hin']}\n\n"
-    await u.message.reply_html(msg)
+    if user["current_lesson"]:
+        await send_lesson_ui(uid, c, user["current_lesson"], user["day"], user["streak"])
+    else:
+        await u.message.reply_text("❌ AI is busy. Try /test again in 10 seconds.")
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
@@ -127,43 +112,19 @@ async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     user = users.get(uid)
     await query.answer()
 
-    if "save_" in query.data:
-        idx = int(query.data.split("_")[1])
-        sentence = user["current_lesson"]["sentences"][idx]
-        entry = {"eng": sentence["eng"], "hin": sentence["male"]}
-        if entry not in user["vocab"]:
-            user["vocab"].append(entry)
-            save_users(users)
-            await c.bot.send_message(chat_id=uid, text=f"✅ Saved to /vocabulary: {entry['eng']}")
-
-    elif query.data == "next_day":
-        user["prev_lesson"] = user["current_lesson"]
+    if query.data == "next_day":
         user["day"] += 1
+        wait = await c.bot.send_message(chat_id=uid, text="⏳ <i>Loading Day " + str(user['day']) + "...</i>", parse_mode="HTML")
+        user["current_lesson"] = await fetch_ai_lesson(user["day"])
         save_users(users)
-        
-        # Pre-fetch and send
-        new_lesson = await fetch_ai_lesson(user["day"])
-        user["current_lesson"] = new_lesson
-        save_users(users)
-        await send_lesson_ui(uid, c, user["current_lesson"], user["day"], user["streak"])
-
-    elif query.data == "review_prev":
-        if user.get("prev_lesson"):
-            await send_lesson_ui(uid, c, user["prev_lesson"], user["day"]-1, user["streak"], True)
-        else:
-            await c.bot.send_message(chat_id=uid, text="No previous lesson to show!")
-
-    elif query.data == "back_today":
+        await c.bot.delete_message(chat_id=uid, message_id=wait.message_id)
         await send_lesson_ui(uid, c, user["current_lesson"], user["day"], user["streak"])
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
     app_bot = ApplicationBuilder().token(TOKEN).build()
-    
     app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CommandHandler("status", status_cmd))
     app_bot.add_handler(CommandHandler("test", test_cmd))
-    app_bot.add_handler(CommandHandler("vocabulary", vocab_cmd))
     app_bot.add_handler(CallbackQueryHandler(callback_handler))
-    
-    print("Bot is polling...")
     app_bot.run_polling(drop_pending_updates=True)
