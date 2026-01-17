@@ -24,6 +24,12 @@ USERS_FILE = "users.json"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
+# --- BACKUP LESSONS (Used only if AI is totally dead) ---
+OFFLINE_LESSONS = {
+    1: {"sentences": [{"eng": "The weather is nice today.", "hin": "आज मौसम अच्छा है।"}, {"eng": "I am learning English.", "hin": "मैं अंग्रेजी सीख रहा हूँ।"}]},
+    2: {"sentences": [{"eng": "Where is the nearest station?", "hin": "सबसे पास का स्टेशन कहाँ है?"}, {"eng": "I need some help.", "hin": "मुझे कुछ मदद चाहिए।"}]}
+}
+
 def load_db():
     if not os.path.exists(USERS_FILE): return {}
     try:
@@ -33,23 +39,24 @@ def load_db():
 def save_db(data):
     with open(USERS_FILE, "w") as f: json.dump(data, f, indent=2)
 
-# --- THE STUBBORN ENGINE ---
+# --- THE STUBBORN ENGINE WITH OFFLINE FALLBACK ---
 async def fetch_ai_lesson(day, retries=5):
-    prompt = (f"English Teacher. Day {day} lesson. 5 sentences. "
+    prompt = (f"English Teacher. Day {day} lesson. 5 beginner sentences. "
               "Return ONLY JSON: {'sentences': [{'eng': '', 'hin': ''}]}")
     
     for i in range(retries):
         try:
-            response = model.generate_content(prompt)
+            # Short timeout to prevent hanging
+            response = await asyncio.wait_for(asyncio.to_thread(model.generate_content, prompt), timeout=10)
             clean_text = response.text.strip().replace('```json', '').replace('```', '')
             return json.loads(clean_text)
-        except Exception as e:
-            # Wait longer each time (2s, 4s, 6s...)
-            wait_time = (i + 1) * 2
-            print(f"Attempt {i+1} failed. Retrying in {wait_time}s...")
-            await asyncio.sleep(wait_time)
+        except Exception:
+            await asyncio.sleep((i + 1) * 2)
             continue
-    return None
+    
+    # --- FALLBACK ---
+    print(f"AI Failed after 5 tries. Using Offline Backup for Day {day}.")
+    return OFFLINE_LESSONS.get(day, OFFLINE_LESSONS[1])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     uid = str(u.effective_chat.id)
@@ -64,15 +71,15 @@ async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     db = load_db()
     user = db.get(uid, {"day": 1, "next_lesson": None})
 
-    # If we have a pre-fetched lesson, use it INSTANTLY
     if user.get("next_lesson"):
         data = user["next_lesson"]
-        user["next_lesson"] = None # Clear it
+        user["next_lesson"] = None
+        is_cached = True
     else:
-        # Fallback if cache is empty
-        msg = await u.message.reply_text("⏳ AI is busy, fetching fresh data...")
+        msg = await u.message.reply_text("⏳ <i>Connecting to Gemini AI...</i>", parse_mode="HTML")
         data = await fetch_ai_lesson(user['day'])
         await c.bot.delete_message(chat_id=uid, message_id=msg.message_id)
+        is_cached = False
 
     if data:
         txt = f"📖 <b>DAY {user['day']}</b>\n\n"
@@ -82,23 +89,20 @@ async def test_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
         btns = [[InlineKeyboardButton("⏭️ Next Day", callback_data="next_day")]]
         await u.message.reply_html(txt, reply_markup=InlineKeyboardMarkup(btns))
         
-        # BACKGROUND TASK: Pre-fetch tomorrow's lesson now!
         user['day'] += 1
         db[uid] = user
         save_db(db)
         
-        # This part runs in background
+        # Pre-fetch for tomorrow (Quietly)
         asyncio.create_task(background_prefetch(uid, user['day']))
-    else:
-        await u.message.reply_text("❌ Google is still overloaded. Please try again in 1 minute.")
 
 async def background_prefetch(uid, day):
     db = load_db()
     if uid in db:
         lesson = await fetch_ai_lesson(day)
-        if lesson:
-            db[uid]["next_lesson"] = lesson
-            save_db(db)
+        db = load_db() # Refresh db before saving
+        db[uid]["next_lesson"] = lesson
+        save_db(db)
 
 async def callback_handler(u: Update, c: ContextTypes.DEFAULT_TYPE):
     query = u.callback_query
